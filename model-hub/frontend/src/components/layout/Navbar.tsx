@@ -13,6 +13,7 @@ import {
   X
 } from 'lucide-react';
 import { useState } from 'react';
+import StopAllButton from '@/components/demo/StopAllButton';
 
 export default function Navbar() {
   const { user, isAuthenticated, logout } = useAuth();
@@ -47,6 +48,9 @@ export default function Navbar() {
                 <span>Upload</span>
               </Link>
             )}
+
+            {/* Stop All Demos Button */}
+            <StopAllButton />
 
             {isAuthenticated ? (
               <div className="flex items-center space-x-4">

@@ -8,6 +8,7 @@ import sys
 import subprocess
 import asyncio
 import signal
+import socket
 from typing import Optional, Dict, Tuple, List
 import logging
 from datetime import datetime
@@ -91,14 +92,89 @@ class DemoLauncher:
     def get_available_port(self) -> Optional[int]:
         """
         Find an available port for the Streamlit app.
+        Checks both our internal tracking AND actual port availability.
         
         Returns:
             An available port number or None if all ports are in use
         """
         for port in range(settings.demo_port_start, settings.demo_port_end + 1):
             if port not in self.used_ports:
-                return port
+                # Also check if port is actually available on the system
+                if self._is_port_available(port):
+                    return port
+                else:
+                    # Port is in use by something else, add to our tracking
+                    logger.warning(f"Port {port} is in use by external process")
+                    self.used_ports.add(port)
         return None
+    
+    def _is_port_available(self, port: int) -> bool:
+        """Check if a port is actually available on the system."""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+                s.settimeout(1)
+                s.bind(('0.0.0.0', port))
+                return True
+        except (socket.error, OSError):
+            return False
+    
+    def _kill_process_on_port(self, port: int) -> bool:
+        """Kill any process running on the specified port."""
+        try:
+            # Find process using lsof
+            result = subprocess.run(
+                ['lsof', '-ti', f':{port}'],
+                capture_output=True,
+                text=True
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                pids = result.stdout.strip().split('\n')
+                for pid in pids:
+                    if pid:
+                        try:
+                            os.kill(int(pid), signal.SIGKILL)
+                            logger.info(f"Killed process {pid} on port {port}")
+                        except (ProcessLookupError, ValueError):
+                            pass
+                return True
+            return False
+        except Exception as e:
+            logger.error(f"Error killing process on port {port}: {e}")
+            return False
+    
+    async def stop_all_demos(self) -> Tuple[int, int]:
+        """
+        Stop all running demos and kill any streamlit processes on demo ports.
+        
+        Returns:
+            Tuple of (demos_stopped, ports_freed)
+        """
+        demos_stopped = 0
+        ports_freed = 0
+        
+        # Stop all tracked demos
+        project_ids = list(self.running_demos.keys())
+        for project_id in project_ids:
+            try:
+                success, _ = await self.stop_demo(project_id)
+                if success:
+                    demos_stopped += 1
+            except Exception as e:
+                logger.error(f"Error stopping demo {project_id}: {e}")
+        
+        # Kill any remaining processes on demo ports
+        for port in range(settings.demo_port_start, settings.demo_port_end + 1):
+            if not self._is_port_available(port):
+                if self._kill_process_on_port(port):
+                    ports_freed += 1
+                    self.used_ports.discard(port)
+        
+        # Clear all tracking
+        self.running_demos.clear()
+        self.used_ports.clear()
+        
+        logger.info(f"Stopped {demos_stopped} demos, freed {ports_freed} ports")
+        return demos_stopped, ports_freed
     
     def is_environment_ready(self, project_id: str) -> bool:
         """Check if the environment is ready (venv exists and has streamlit)."""

@@ -88,6 +88,7 @@ model-hub/backend/demo-environments/*/
 !model-hub/backend/demo-environments/.gitkeep
 
 # Temporary files
+test-demo/
 ruunning.txt
 *.tmp
 *.temp

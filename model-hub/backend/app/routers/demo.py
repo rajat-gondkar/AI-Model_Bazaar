@@ -9,6 +9,7 @@ import logging
 import traceback
 
 from app.database import mongodb
+from app.config import settings
 from app.schemas.project import DemoLaunchResponse, DemoStatusResponse
 from app.services.demo_launcher import demo_launcher
 from app.utils.dependencies import get_current_active_user, get_optional_user
@@ -376,4 +377,68 @@ async def prepare_environment(project_id: str):
     return {
         "status": "started",
         "message": "Environment preparation started"
+    }
+
+
+@router.post("/stop-all")
+async def stop_all_demos():
+    """
+    Stop all running demos and free up all demo ports.
+    
+    This kills all Streamlit processes running on demo ports (8501-8600).
+    Useful for cleaning up stuck processes.
+    """
+    logger.info("Stopping all demos and freeing ports...")
+    
+    try:
+        demos_stopped, ports_freed = await demo_launcher.stop_all_demos()
+        
+        # Update all projects that were marked as running
+        projects_collection = mongodb.get_collection("projects")
+        result = await projects_collection.update_many(
+            {"status": "running"},
+            {
+                "$set": {
+                    "status": "ready",
+                    "demo_url": None,
+                    "demo_port": None,
+                    "demo_pid": None,
+                    "updated_at": datetime.utcnow()
+                }
+            }
+        )
+        
+        return {
+            "success": True,
+            "demos_stopped": demos_stopped,
+            "ports_freed": ports_freed,
+            "projects_updated": result.modified_count,
+            "message": f"Stopped {demos_stopped} demos, freed {ports_freed} ports"
+        }
+    except Exception as e:
+        logger.error(f"Error stopping all demos: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error stopping demos: {str(e)}"
+        )
+
+
+@router.get("/running")
+async def get_running_demos():
+    """
+    Get list of all currently running demos.
+    """
+    running = []
+    for project_id, demo_info in demo_launcher.running_demos.items():
+        running.append({
+            "project_id": project_id,
+            "port": demo_info["port"],
+            "demo_url": f"{settings.demo_base_url}:{demo_info['port']}",
+            "started_at": demo_info["started_at"].isoformat()
+        })
+    
+    return {
+        "running_demos": running,
+        "total": len(running),
+        "used_ports": list(demo_launcher.used_ports)
     }
