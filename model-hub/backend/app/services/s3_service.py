@@ -139,21 +139,43 @@ class S3Service:
         """Download all project files from S3."""
         try:
             s3_prefix = f"projects/{project_id}"
+            logger.info(f"Downloading project from S3: {s3_prefix} -> {local_path}")
+            
             paginator = self.client.get_paginator('list_objects_v2')
+            file_count = 0
             
             for page in paginator.paginate(Bucket=self.bucket_name, Prefix=s3_prefix):
                 if 'Contents' not in page:
+                    logger.warning(f"No contents found for prefix: {s3_prefix}")
                     continue
                     
                 for obj in page['Contents']:
                     s3_key = obj['Key']
                     relative_path = s3_key[len(s3_prefix) + 1:]
+                    
+                    # Skip empty paths (the prefix itself)
+                    if not relative_path:
+                        continue
+                    
                     local_file = os.path.join(local_path, relative_path)
-                    await self.download_file(s3_key, local_file)
+                    logger.info(f"  Downloading: {s3_key} -> {local_file}")
+                    
+                    success = await self.download_file(s3_key, local_file)
+                    if success:
+                        file_count += 1
+                    else:
+                        logger.error(f"  Failed to download: {s3_key}")
             
-            return True
+            logger.info(f"Downloaded {file_count} files for project {project_id}")
+            return file_count > 0
+            
         except ClientError as e:
             logger.error(f"Error downloading project: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error downloading project: {e}")
+            import traceback
+            logger.error(traceback.format_exc())
             return False
     
     def _delete_objects_sync(self, s3_prefix: str) -> bool:

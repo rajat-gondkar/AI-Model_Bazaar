@@ -7,6 +7,9 @@ from pydantic_settings import BaseSettings
 from typing import List
 import os
 
+# Get the absolute path to the backend directory
+BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
@@ -28,7 +31,7 @@ class Settings(BaseSettings):
     
     # Demo Configuration
     demo_base_url: str = "http://localhost"
-    demo_environments_path: str = "./demo-environments"
+    demo_environments_path: str = os.path.join(BACKEND_DIR, "demo-environments")
     demo_port_start: int = 8501
     demo_port_end: int = 8600
     

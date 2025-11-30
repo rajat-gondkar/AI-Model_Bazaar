@@ -5,11 +5,15 @@ Demo routes for launching, checking status, and stopping demos.
 from fastapi import APIRouter, HTTPException, status, Depends
 from datetime import datetime
 from bson import ObjectId
+import logging
+import traceback
 
 from app.database import mongodb
 from app.schemas.project import DemoLaunchResponse, DemoStatusResponse
 from app.services.demo_launcher import demo_launcher
 from app.utils.dependencies import get_current_active_user, get_optional_user
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/demo", tags=["Demo"])
 
@@ -28,31 +32,40 @@ async def launch_demo(project_id: str):
     Path parameters:
     - **project_id**: The project's unique ID
     """
+    logger.info(f"=== Launch Demo Request for project: {project_id} ===")
+    
     projects_collection = mongodb.get_collection("projects")
     
     # Get project
     try:
         project = await projects_collection.find_one({"_id": ObjectId(project_id)})
-    except Exception:
+    except Exception as e:
+        logger.error(f"Invalid project ID format: {project_id}, error: {e}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Invalid project ID format"
         )
     
     if not project:
+        logger.error(f"Project not found: {project_id}")
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Project not found"
         )
     
+    logger.info(f"Found project: {project['name']}, status: {project['status']}")
+    logger.info(f"Project files info: {project.get('files', {})}")
+    
     # Check if project is ready
     if project["status"] == "pending":
+        logger.warning(f"Project {project_id} is still pending")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Project is still being processed"
         )
     
     if project["status"] == "error":
+        logger.warning(f"Project {project_id} has error status")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="Project has an error and cannot be launched"
@@ -61,6 +74,7 @@ async def launch_demo(project_id: str):
     # Check if already running
     demo_status = demo_launcher.get_demo_status(project_id)
     if demo_status["status"] == "running":
+        logger.info(f"Demo already running at {demo_status['demo_url']}")
         return DemoLaunchResponse(
             status="running",
             message="Demo is already running",
@@ -69,9 +83,20 @@ async def launch_demo(project_id: str):
     
     # Launch the demo
     app_file = project["files"].get("app_file", "app.py")
-    success, message, demo_url, port = await demo_launcher.launch_demo(project_id, app_file)
+    logger.info(f"Attempting to launch demo with app_file: {app_file}")
+    
+    try:
+        success, message, demo_url, port = await demo_launcher.launch_demo(project_id, app_file)
+    except Exception as e:
+        logger.error(f"Exception during demo launch: {e}")
+        logger.error(traceback.format_exc())
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error launching demo: {str(e)}"
+        )
     
     if not success:
+        logger.error(f"Demo launch failed: {message}")
         # Update project status to error
         await projects_collection.update_one(
             {"_id": ObjectId(project_id)},
@@ -271,3 +296,84 @@ async def cleanup_demo_environment(
         )
     
     return {"message": "Environment cleaned up successfully"}
+
+
+@router.get("/{project_id}/env-status")
+async def get_environment_status(project_id: str):
+    """
+    Get the environment preparation status.
+    
+    Returns:
+    - **status**: 'not_prepared', 'preparing', or 'ready'
+    - **message**: Status description
+    """
+    logger.info(f"Checking environment status for {project_id}")
+    
+    projects_collection = mongodb.get_collection("projects")
+    
+    # Verify project exists
+    try:
+        project = await projects_collection.find_one({"_id": ObjectId(project_id)})
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid project ID format"
+        )
+    
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found"
+        )
+    
+    env_status = demo_launcher.get_environment_status(project_id)
+    logger.info(f"Environment status for {project_id}: {env_status}")
+    
+    return env_status
+
+
+@router.post("/{project_id}/prepare")
+async def prepare_environment(project_id: str):
+    """
+    Manually trigger environment preparation (download + install dependencies).
+    
+    This is useful if the automatic pre-installation failed or you want to refresh.
+    """
+    logger.info(f"Manual environment preparation requested for {project_id}")
+    
+    projects_collection = mongodb.get_collection("projects")
+    
+    # Verify project exists
+    try:
+        project = await projects_collection.find_one({"_id": ObjectId(project_id)})
+    except Exception:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid project ID format"
+        )
+    
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found"
+        )
+    
+    # Check if already preparing
+    env_status = demo_launcher.get_environment_status(project_id)
+    if env_status["status"] == "preparing":
+        return {
+            "status": "already_preparing",
+            "message": env_status["message"]
+        }
+    
+    # Clean up existing environment first
+    await demo_launcher.cleanup_environment(project_id)
+    
+    # Start preparation
+    import asyncio
+    asyncio.create_task(demo_launcher.preinstall_environment(project_id))
+    
+    return {
+        "status": "started",
+        "message": "Environment preparation started"
+    }

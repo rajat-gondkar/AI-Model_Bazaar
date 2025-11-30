@@ -21,6 +21,19 @@ export default function LaunchButton({
   const [status, setStatus] = useState(initialStatus);
   const [demoUrl, setDemoUrl] = useState<string | null>(initialDemoUrl);
   const [isLoading, setIsLoading] = useState(false);
+  const [hasAutoOpened, setHasAutoOpened] = useState(false);
+
+  // Auto-open demo when it becomes available
+  useEffect(() => {
+    if (status === 'running' && demoUrl && !hasAutoOpened) {
+      setHasAutoOpened(true);
+      // Small delay to ensure the server is fully ready
+      setTimeout(() => {
+        window.open(demoUrl, '_blank');
+        toast.success('Demo opened in a new tab!');
+      }, 1000);
+    }
+  }, [status, demoUrl, hasAutoOpened]);
 
   // Poll for status when launching
   useEffect(() => {
@@ -80,6 +93,7 @@ export default function LaunchButton({
       await demoApi.stop(projectId);
       setStatus('ready');
       setDemoUrl(null);
+      setHasAutoOpened(false); // Reset so next launch will auto-open
       toast.success('Demo stopped');
     } catch (error: any) {
       const message = error.response?.data?.detail || 'Failed to stop demo';

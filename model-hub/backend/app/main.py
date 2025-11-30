@@ -13,11 +13,22 @@ from app.config import settings
 from app.database import mongodb
 from app.routers import auth_router, projects_router, demo_router
 
-# Configure logging
+# Configure logging - Always show INFO level for debugging
 logging.basicConfig(
-    level=logging.INFO if settings.debug else logging.WARNING,
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    level=logging.INFO,  # Always INFO for better debugging
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler()
+    ]
 )
+
+# Set specific loggers to INFO level for detailed debugging
+logging.getLogger("app.services.demo_launcher").setLevel(logging.INFO)
+logging.getLogger("app.services.s3_service").setLevel(logging.INFO)
+logging.getLogger("app.services.archive_service").setLevel(logging.INFO)
+logging.getLogger("app.routers.demo").setLevel(logging.INFO)
+logging.getLogger("app.routers.projects").setLevel(logging.INFO)
+
 logger = logging.getLogger(__name__)
 
 
@@ -29,6 +40,14 @@ async def lifespan(app: FastAPI):
     """
     # Startup
     logger.info("Starting Model Hub API...")
+    logger.info(f"Demo environments path: {settings.demo_environments_path}")
+    logger.info(f"S3 Bucket: {settings.s3_bucket_name}")
+    logger.info(f"Demo ports: {settings.demo_port_start}-{settings.demo_port_end}")
+    
+    # Ensure demo environments directory exists
+    import os
+    os.makedirs(settings.demo_environments_path, exist_ok=True)
+    
     await mongodb.connect()
     logger.info("Model Hub API started successfully")
     
