@@ -20,6 +20,7 @@ from app.schemas.project import (
 )
 from app.services.s3_service import s3_service
 from app.services.archive_service import archive_service
+from app.services.demo_launcher import demo_launcher
 from app.utils.dependencies import get_current_active_user, get_optional_user
 from app.utils.validators import validate_archive_extension, validate_file_size
 from app.config import settings
@@ -154,6 +155,10 @@ async def upload_project(
                 }
             }
         )
+        
+        # Start background pre-installation of dependencies (non-blocking)
+        import asyncio
+        asyncio.create_task(demo_launcher.preinstall_environment(project_id))
         
         return ProjectResponse(
             id=project_id,
