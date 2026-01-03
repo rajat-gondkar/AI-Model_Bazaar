@@ -7,8 +7,9 @@ import { useAuth } from '@/context/AuthContext';
 import { projectsApi } from '@/lib/api';
 import { ProjectListItem } from '@/types';
 import ModelCard from '@/components/gallery/ModelCard';
+import { ProfileSkeleton } from '@/components/ui/Skeleton';
 import { User, Mail, Calendar, Loader2, FolderOpen, Plus } from 'lucide-react';
-import { formatDate } from '@/lib/utils';
+import { formatDate, parseApiError } from '@/lib/utils';
 import toast from 'react-hot-toast';
 
 export default function ProfilePage() {
@@ -32,8 +33,8 @@ export default function ProfilePage() {
       try {
         const response = await projectsApi.myProjects();
         setMyProjects(response.projects);
-      } catch (err) {
-        toast.error('Failed to load your projects');
+      } catch (err: any) {
+        toast.error(parseApiError(err));
       } finally {
         setIsLoadingProjects(false);
       }
@@ -59,15 +60,17 @@ export default function ProfilePage() {
       await projectsApi.delete(projectId);
       setMyProjects((prev) => prev.filter((p) => p.id !== projectId));
       toast.success('Project deleted successfully');
-    } catch (err) {
-      toast.error('Failed to delete project');
+    } catch (err: any) {
+      toast.error(parseApiError(err));
     }
   };
 
   if (authLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="h-8 w-8 text-primary-600 animate-spin" />
+      <div className="min-h-screen bg-gray-50 py-8">
+        <div className="container mx-auto px-4">
+          <ProfileSkeleton />
+        </div>
       </div>
     );
   }

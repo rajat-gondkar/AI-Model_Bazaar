@@ -12,6 +12,7 @@ from app.database import mongodb
 from app.config import settings
 from app.schemas.project import DemoLaunchResponse, DemoStatusResponse
 from app.services.demo_launcher import demo_launcher
+from app.services.archive_service import ArchiveService
 from app.utils.dependencies import get_current_active_user, get_optional_user
 
 logger = logging.getLogger(__name__)
@@ -426,12 +427,24 @@ async def stop_all_demos():
 @router.get("/running")
 async def get_running_demos():
     """
-    Get list of all currently running demos.
+    Get list of all currently running demos with project details.
     """
+    projects_collection = mongodb.get_collection("projects")
+    
     running = []
     for project_id, demo_info in demo_launcher.running_demos.items():
+        # Get project details
+        project_name = "Unknown Project"
+        try:
+            project = await projects_collection.find_one({"_id": ObjectId(project_id)})
+            if project:
+                project_name = project.get("name", "Unknown Project")
+        except Exception:
+            pass
+        
         running.append({
             "project_id": project_id,
+            "project_name": project_name,
             "port": demo_info["port"],
             "demo_url": f"{settings.demo_base_url}:{demo_info['port']}",
             "started_at": demo_info["started_at"].isoformat()
@@ -441,4 +454,241 @@ async def get_running_demos():
         "running_demos": running,
         "total": len(running),
         "used_ports": list(demo_launcher.used_ports)
+    }
+
+
+@router.post("/{project_id}/install")
+async def install_dependencies(project_id: str):
+    """
+    Install dependencies for a project without launching the demo.
+    This sets up the virtual environment and installs requirements.
+    """
+    logger.info(f"=== Install Dependencies Request for project: {project_id} ===")
+    
+    projects_collection = mongodb.get_collection("projects")
+    
+    # Get project
+    try:
+        project = await projects_collection.find_one({"_id": ObjectId(project_id)})
+    except Exception as e:
+        logger.error(f"Invalid project ID format: {project_id}, error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid project ID format"
+        )
+    
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found"
+        )
+    
+    # Check if already installing
+    env_status = demo_launcher.get_environment_status(project_id)
+    if env_status["status"] == "preparing":
+        return {
+            "status": "installing",
+            "message": env_status["message"]
+        }
+    
+    if env_status["status"] == "ready":
+        return {
+            "status": "ready",
+            "message": "Dependencies already installed"
+        }
+    
+    # Start installation in background
+    import asyncio
+    asyncio.create_task(demo_launcher.preinstall_environment(project_id))
+    
+    return {
+        "status": "installing",
+        "message": "Installing dependencies..."
+    }
+
+
+@router.post("/{project_id}/run")
+async def run_demo_only(project_id: str):
+    """
+    Run the demo assuming dependencies are already installed.
+    This is faster than launch as it skips the install step.
+    """
+    logger.info(f"=== Run Demo Request for project: {project_id} ===")
+    
+    projects_collection = mongodb.get_collection("projects")
+    
+    # Get project
+    try:
+        project = await projects_collection.find_one({"_id": ObjectId(project_id)})
+    except Exception as e:
+        logger.error(f"Invalid project ID format: {project_id}, error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid project ID format"
+        )
+    
+    if not project:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Project not found"
+        )
+    
+    # Check if environment is ready
+    env_status = demo_launcher.get_environment_status(project_id)
+    if env_status["status"] == "preparing":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Dependencies are still being installed. Please wait."
+        )
+    
+    if env_status["status"] == "not_prepared":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Dependencies not installed. Please install dependencies first."
+        )
+    
+    # Check if already running
+    demo_status = demo_launcher.get_demo_status(project_id)
+    if demo_status["status"] == "running":
+        return {
+            "status": "running",
+            "message": "Demo is already running",
+            "demo_url": demo_status["demo_url"]
+        }
+    
+    # Run the demo (skip setup since dependencies are installed)
+    app_file = project["files"].get("app_file", "app.py")
+    
+    try:
+        success, message, demo_url, port = await demo_launcher.run_demo(project_id, app_file)
+    except Exception as e:
+        logger.error(f"Exception during demo run: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Error running demo: {str(e)}"
+        )
+    
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=message
+        )
+    
+    # Update project with demo info
+    await projects_collection.update_one(
+        {"_id": ObjectId(project_id)},
+        {
+            "$set": {
+                "status": "running",
+                "demo_url": demo_url,
+                "demo_port": port,
+                "updated_at": datetime.utcnow()
+            }
+        }
+    )
+    
+    return {
+        "status": "running",
+        "message": "Demo started successfully",
+        "demo_url": demo_url
+    }
+
+
+@router.post("/stop-port/{port}")
+async def stop_demo_by_port(port: int):
+    """
+    Stop a demo running on a specific port.
+    """
+    logger.info(f"=== Stop Demo by Port Request: {port} ===")
+    
+    # Find which project is using this port
+    project_id = None
+    for pid, demo_info in demo_launcher.running_demos.items():
+        if demo_info["port"] == port:
+            project_id = pid
+            break
+    
+    if project_id:
+        # Stop via project ID
+        success, message = await demo_launcher.stop_demo(project_id)
+        
+        if success:
+            # Update project status
+            projects_collection = mongodb.get_collection("projects")
+            await projects_collection.update_one(
+                {"_id": ObjectId(project_id)},
+                {
+                    "$set": {
+                        "status": "ready",
+                        "demo_url": None,
+                        "demo_port": None,
+                        "updated_at": datetime.utcnow()
+                    }
+                }
+            )
+            return {"success": True, "message": f"Demo on port {port} stopped"}
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=message
+            )
+    else:
+        # Kill process on port directly
+        killed = demo_launcher._kill_process_on_port(port)
+        if killed:
+            demo_launcher.used_ports.discard(port)
+            return {"success": True, "message": f"Process on port {port} killed"}
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"No process found on port {port}"
+            )
+
+
+@router.post("/cleanup-all-hidden")
+async def cleanup_all_hidden_files():
+    """
+    Clean up hidden/system files from all existing demo environments.
+    
+    Removes files like __MACOSX, .DS_Store, ._* files, etc.
+    This is useful for cleaning up environments that were created before
+    the hidden file filtering was added.
+    """
+    import os
+    
+    logger.info("Cleaning up hidden files from all demo environments...")
+    
+    base_path = settings.demo_environments_path
+    
+    if not os.path.exists(base_path):
+        return {
+            "success": True,
+            "total_removed": 0,
+            "environments_cleaned": 0,
+            "message": "No demo environments directory found"
+        }
+    
+    total_removed = 0
+    environments_cleaned = 0
+    
+    # Iterate through each project environment
+    for project_id in os.listdir(base_path):
+        project_path = os.path.join(base_path, project_id)
+        
+        if os.path.isdir(project_path):
+            # Clean files folder specifically
+            files_path = os.path.join(project_path, "files")
+            
+            if os.path.exists(files_path):
+                removed = ArchiveService.cleanup_hidden_files(files_path)
+                if removed > 0:
+                    total_removed += removed
+                    environments_cleaned += 1
+                    logger.info(f"Cleaned {removed} hidden files from {project_id}")
+    
+    return {
+        "success": True,
+        "total_removed": total_removed,
+        "environments_cleaned": environments_cleaned,
+        "message": f"Removed {total_removed} hidden/system files from {environments_cleaned} environments"
     }

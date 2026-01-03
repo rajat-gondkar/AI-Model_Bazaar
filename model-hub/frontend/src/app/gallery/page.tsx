@@ -5,7 +5,9 @@ import { projectsApi } from '@/lib/api';
 import { ProjectListItem, ProjectFilters, ProjectListResponse } from '@/types';
 import ModelCard from '@/components/gallery/ModelCard';
 import SearchFilter from '@/components/gallery/SearchFilter';
+import { ModelCardSkeleton } from '@/components/ui/Skeleton';
 import { Loader2, FolderOpen } from 'lucide-react';
+import { parseApiError } from '@/lib/utils';
 
 export default function GalleryPage() {
   const [projects, setProjects] = useState<ProjectListItem[]>([]);
@@ -38,7 +40,7 @@ export default function GalleryPage() {
         per_page: response.per_page,
       });
     } catch (err: any) {
-      setError(err.response?.data?.detail || 'Failed to load projects');
+      setError(parseApiError(err));
       setProjects([]);
     } finally {
       setIsLoading(false);
@@ -84,11 +86,12 @@ export default function GalleryPage() {
           </p>
         )}
 
-        {/* Loading state */}
+        {/* Loading state - Skeleton Grid */}
         {isLoading && (
-          <div className="flex items-center justify-center py-20">
-            <Loader2 className="h-8 w-8 text-primary-600 animate-spin" />
-            <span className="ml-2 text-gray-600">Loading models...</span>
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {[...Array(6)].map((_, i) => (
+              <ModelCardSkeleton key={i} />
+            ))}
           </div>
         )}
 

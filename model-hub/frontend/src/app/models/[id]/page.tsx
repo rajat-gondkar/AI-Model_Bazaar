@@ -7,6 +7,7 @@ import { projectsApi } from '@/lib/api';
 import { Project } from '@/types';
 import { useAuth } from '@/context/AuthContext';
 import LaunchButton from '@/components/demo/LaunchButton';
+import { ModelDetailsSkeleton } from '@/components/ui/Skeleton';
 import { 
   ArrowLeft, 
   User, 
@@ -18,7 +19,7 @@ import {
   Loader2,
   ExternalLink
 } from 'lucide-react';
-import { formatDate, getStatusColor } from '@/lib/utils';
+import { formatDate, getStatusColor, parseApiError } from '@/lib/utils';
 
 export default function ModelDetailPage() {
   const params = useParams();
@@ -35,7 +36,7 @@ export default function ModelDetailPage() {
         const data = await projectsApi.get(projectId);
         setProject(data);
       } catch (err: any) {
-        setError(err.response?.data?.detail || 'Failed to load project');
+        setError(parseApiError(err));
       } finally {
         setIsLoading(false);
       }
@@ -48,8 +49,22 @@ export default function ModelDetailPage() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Loader2 className="h-8 w-8 text-primary-600 animate-spin" />
+      <div className="min-h-screen bg-gray-50 py-8">
+        <div className="container mx-auto px-4">
+          <div className="mb-6">
+            <div className="h-6 w-32 bg-gray-200 rounded animate-pulse" />
+          </div>
+          <div className="grid lg:grid-cols-3 gap-8">
+            <div className="lg:col-span-2">
+              <ModelDetailsSkeleton />
+            </div>
+            <div className="space-y-6">
+              <div className="bg-white rounded-xl shadow-sm border p-6">
+                <div className="h-12 bg-gray-200 rounded-lg animate-pulse" />
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
     );
   }

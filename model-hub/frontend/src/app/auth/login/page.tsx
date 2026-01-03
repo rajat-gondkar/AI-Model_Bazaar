@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { Mail, Lock, Eye, EyeOff, AlertCircle, LogIn } from 'lucide-react';
+import { parseApiError } from '@/lib/utils';
 import toast from 'react-hot-toast';
 
 export default function LoginPage() {
@@ -43,7 +44,7 @@ export default function LoginPage() {
       const redirect = searchParams.get('redirect') || '/gallery';
       router.push(redirect);
     } catch (err: any) {
-      const message = err.response?.data?.detail || 'Invalid email or password';
+      const message = parseApiError(err);
       setError(message);
       toast.error(message);
     } finally {

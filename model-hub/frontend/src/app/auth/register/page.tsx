@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useAuth } from '@/context/AuthContext';
 import { Mail, Lock, User, Eye, EyeOff, AlertCircle, UserPlus } from 'lucide-react';
+import { parseApiError, getFieldErrors, isValidationError } from '@/lib/utils';
 import toast from 'react-hot-toast';
 
 export default function RegisterPage() {
@@ -69,13 +70,21 @@ export default function RegisterPage() {
       toast.success('Account created successfully!');
       router.push('/gallery');
     } catch (err: any) {
-      const message = err.response?.data?.detail || 'Failed to create account';
+      const message = parseApiError(err);
       toast.error(message);
       
-      // Handle specific errors
-      if (message.includes('email')) {
+      // Handle validation errors with field-specific messages
+      if (isValidationError(err)) {
+        const fieldErrors = getFieldErrors(err);
+        if (Object.keys(fieldErrors).length > 0) {
+          setErrors((prev) => ({ ...prev, ...fieldErrors }));
+        }
+      }
+      
+      // Handle specific errors from message
+      if (message.toLowerCase().includes('email')) {
         setErrors((prev) => ({ ...prev, email: message }));
-      } else if (message.includes('username')) {
+      } else if (message.toLowerCase().includes('username')) {
         setErrors((prev) => ({ ...prev, username: message }));
       }
     } finally {

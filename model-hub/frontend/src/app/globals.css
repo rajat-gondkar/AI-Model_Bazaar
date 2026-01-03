@@ -53,6 +53,10 @@ body {
     animation: slideUp 0.3s ease-out;
   }
 
+  .animate-slide-in-right {
+    animation: slideInRight 0.3s ease-out;
+  }
+
   .animate-pulse-slow {
     animation: pulse 3s cubic-bezier(0.4, 0, 0.6, 1) infinite;
   }
@@ -75,6 +79,17 @@ body {
   to {
     opacity: 1;
     transform: translateY(0);
+  }
+}
+
+@keyframes slideInRight {
+  from {
+    opacity: 0;
+    transform: translateX(100%);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
   }
 }
 
@@ -101,4 +116,76 @@ body {
   background: rgba(255, 255, 255, 0.8);
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
+}
+
+/* Responsive text utilities */
+@layer utilities {
+  .text-responsive-sm {
+    @apply text-sm md:text-base;
+  }
+  
+  .text-responsive-base {
+    @apply text-base md:text-lg;
+  }
+  
+  .text-responsive-lg {
+    @apply text-lg md:text-xl;
+  }
+  
+  .text-responsive-xl {
+    @apply text-xl md:text-2xl;
+  }
+  
+  .text-responsive-2xl {
+    @apply text-2xl md:text-3xl lg:text-4xl;
+  }
+  
+  .text-responsive-3xl {
+    @apply text-3xl md:text-4xl lg:text-5xl;
+  }
+}
+
+/* Responsive spacing utilities */
+@layer utilities {
+  .section-padding {
+    @apply py-12 md:py-16 lg:py-20;
+  }
+  
+  .container-padding {
+    @apply px-4 md:px-6 lg:px-8;
+  }
+}
+
+/* Mobile touch improvements */
+@media (hover: none) and (pointer: coarse) {
+  .card-hover:hover {
+    transform: none;
+  }
+  
+  /* Increase touch targets on mobile */
+  button, a {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}
+
+/* Safe area padding for mobile devices */
+.safe-area-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.safe-area-top {
+  padding-top: env(safe-area-inset-top);
+}
+
+/* Improve text readability on mobile */
+@media (max-width: 640px) {
+  html {
+    -webkit-text-size-adjust: 100%;
+  }
+  
+  body {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
 }

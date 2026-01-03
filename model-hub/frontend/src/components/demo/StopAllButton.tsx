@@ -3,6 +3,7 @@
 import { useState } from 'react';
 import { StopCircle, Loader2, AlertTriangle } from 'lucide-react';
 import { demoApi } from '@/lib/api';
+import { parseApiError } from '@/lib/utils';
 import toast from 'react-hot-toast';
 
 export default function StopAllButton() {
@@ -16,7 +17,7 @@ export default function StopAllButton() {
       toast.success(result.message);
       setShowConfirm(false);
     } catch (error: any) {
-      const message = error.response?.data?.detail || 'Failed to stop demos';
+      const message = parseApiError(error);
       toast.error(message);
     } finally {
       setIsLoading(false);

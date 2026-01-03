@@ -7,6 +7,7 @@ import toast from 'react-hot-toast';
 import { useRouter } from 'next/navigation';
 import { projectsApi } from '@/lib/api';
 import { useAuth } from '@/context/AuthContext';
+import { parseApiError, getFieldErrors, isValidationError } from '@/lib/utils';
 
 export default function UploadForm() {
   const router = useRouter();
@@ -121,8 +122,18 @@ export default function UploadForm() {
       toast.success('Project uploaded successfully!');
       router.push(`/models/${result.id}`);
     } catch (error: any) {
-      const message = error.response?.data?.detail || 'Failed to upload project';
-      toast.error(message);
+      // Handle validation errors with field-specific messages
+      if (isValidationError(error)) {
+        const fieldErrors = getFieldErrors(error);
+        if (Object.keys(fieldErrors).length > 0) {
+          setErrors(prev => ({ ...prev, ...fieldErrors }));
+          toast.error('Please fix the validation errors');
+        } else {
+          toast.error(parseApiError(error));
+        }
+      } else {
+        toast.error(parseApiError(error));
+      }
     } finally {
       setIsUploading(false);
     }

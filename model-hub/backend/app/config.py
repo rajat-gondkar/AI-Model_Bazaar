@@ -6,9 +6,14 @@ Loads environment variables and provides typed settings.
 from pydantic_settings import BaseSettings
 from typing import List
 import os
+import tempfile
 
 # Get the absolute path to the backend directory
 BACKEND_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+
+# Use a directory OUTSIDE the backend folder to avoid uvicorn reload issues
+# This ensures file changes in demo environments don't trigger server reloads
+DEFAULT_DEMO_ENV_PATH = os.path.join(tempfile.gettempdir(), "model-hub-demos")
 
 
 class Settings(BaseSettings):
@@ -31,7 +36,7 @@ class Settings(BaseSettings):
     
     # Demo Configuration
     demo_base_url: str = "http://localhost"
-    demo_environments_path: str = os.path.join(BACKEND_DIR, "demo-environments")
+    demo_environments_path: str = DEFAULT_DEMO_ENV_PATH
     demo_port_start: int = 8501
     demo_port_end: int = 8600
     

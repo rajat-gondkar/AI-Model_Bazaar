@@ -15,6 +15,7 @@ from datetime import datetime
 
 from app.config import settings
 from app.services.s3_service import s3_service
+from app.services.archive_service import ArchiveService
 
 logger = logging.getLogger(__name__)
 
@@ -232,6 +233,12 @@ class DemoLauncher:
                     del self.preparing_envs[project_id]
                 return False, "Failed to download project files from S3"
             
+            # Clean up any hidden/system files (like __MACOSX, .DS_Store)
+            self.preparing_envs[project_id] = "Cleaning up system files..."
+            removed_count = ArchiveService.cleanup_hidden_files(files_path)
+            if removed_count > 0:
+                logger.info(f"Cleaned up {removed_count} hidden/system files from {files_path}")
+            
             self.preparing_envs[project_id] = "Creating virtual environment..."
             
             # Create virtual environment
@@ -321,6 +328,89 @@ class DemoLauncher:
         except Exception as e:
             logger.error(f"Error in pre-installation for {project_id}: {e}")
     
+    async def run_demo(self, project_id: str, app_file: str = "app.py") -> Tuple[bool, str, Optional[str], Optional[int]]:
+        """
+        Run a Streamlit demo assuming dependencies are already installed.
+        This is faster than launch_demo as it skips the install step.
+        
+        Args:
+            project_id: The project ID
+            app_file: The main Streamlit app file
+            
+        Returns:
+            Tuple of (success, message, demo_url, port)
+        """
+        # Check if already running
+        if project_id in self.running_demos:
+            demo = self.running_demos[project_id]
+            demo_url = f"{settings.demo_base_url}:{demo['port']}"
+            return True, "Demo is already running", demo_url, demo['port']
+        
+        # Check environment is ready
+        if not self.is_environment_ready(project_id):
+            return False, "Dependencies not installed. Please install first.", None, None
+        
+        # Get available port
+        port = self.get_available_port()
+        if not port:
+            return False, "No available ports. Please try again later.", None, None
+        
+        venv_path = self.get_venv_path(project_id)
+        files_path = self.get_files_path(project_id)
+        
+        try:
+            # Get streamlit path
+            streamlit_path = os.path.join(venv_path, "bin", "streamlit") if os.name != 'nt' else os.path.join(venv_path, "Scripts", "streamlit.exe")
+            
+            # Find the actual app file path
+            app_path = self.find_app_file_path(files_path, app_file)
+            
+            if not app_path or not os.path.exists(app_path):
+                all_files = []
+                for root, dirs, files in os.walk(files_path):
+                    for f in files:
+                        all_files.append(os.path.relpath(os.path.join(root, f), files_path))
+                return False, f"App file not found: {app_file}. Available: {all_files}", None, None
+            
+            working_dir = self.get_working_directory(app_path)
+            logger.info(f"Running demo for {project_id} on port {port}")
+            
+            process = subprocess.Popen(
+                [
+                    streamlit_path, "run", app_path,
+                    "--server.port", str(port),
+                    "--server.address", "0.0.0.0",
+                    "--server.headless", "true",
+                    "--browser.gatherUsageStats", "false"
+                ],
+                cwd=working_dir,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                preexec_fn=os.setsid if os.name != 'nt' else None
+            )
+            
+            await asyncio.sleep(2)
+            
+            if process.poll() is not None:
+                stdout, stderr = process.communicate()
+                error_msg = stderr.decode() if stderr else stdout.decode()
+                return False, f"Streamlit failed to start: {error_msg}", None, None
+            
+            self.running_demos[project_id] = {
+                'pid': process.pid,
+                'port': port,
+                'process': process,
+                'started_at': datetime.utcnow()
+            }
+            self.used_ports.add(port)
+            
+            demo_url = f"{settings.demo_base_url}:{port}"
+            return True, "Demo started successfully", demo_url, port
+            
+        except Exception as e:
+            logger.error(f"Error running demo: {e}")
+            return False, str(e), None, None
+
     async def launch_demo(self, project_id: str, app_file: str = "app.py") -> Tuple[bool, str, Optional[str], Optional[int]]:
         """
         Launch a Streamlit demo for a project.
