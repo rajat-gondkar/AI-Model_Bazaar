@@ -351,14 +351,19 @@ class ArchiveService:
         """
         model_paths = []
         
+        # Model file extensions to look for
+        model_ext_pattern = r'(?:pkl|pt|pth|h5|onnx|pb|weights|bin|model|safetensors)'
+        
         # Common model loading patterns to look for
         patterns = [
+            # YOLO('path/to/model.pt') - YOLOv8 ultralytics
+            r"YOLO\s*\(\s*['\"]([^'\"]+)['\"]",
             # joblib.load('path/to/model.pkl')
             r"joblib\.load\s*\(\s*['\"]([^'\"]+)['\"]",
             # pickle.load(open('model.pkl', 'rb'))
             r"pickle\.load\s*\(\s*open\s*\(\s*['\"]([^'\"]+)['\"]",
             # Path('models/model.pkl')
-            r"Path\s*\(\s*['\"]([^'\"]+\.(?:pkl|pt|pth|h5|onnx|pb|weights|bin|model))['\"]",
+            rf"Path\s*\(\s*['\"]([^'\"]+\.(?:{model_ext_pattern}))['\"]",
             # torch.load('model.pt')
             r"torch\.load\s*\(\s*['\"]([^'\"]+)['\"]",
             # tf.keras.models.load_model('model.h5')
@@ -368,26 +373,41 @@ class ArchiveService:
             # onnxruntime.InferenceSession('model.onnx')
             r"InferenceSession\s*\(\s*['\"]([^'\"]+)['\"]",
             # open('model.pkl', 'rb')
-            r"open\s*\(\s*['\"]([^'\"]+\.(?:pkl|pt|pth|h5|onnx|pb|weights|bin|model))['\"][^)]*['\"]rb['\"]",
+            rf"open\s*\(\s*['\"]([^'\"]+\.(?:{model_ext_pattern}))['\"][^)]*['\"]rb['\"]",
             # with open('model.pkl', 'rb') as f:
-            r"with\s+open\s*\(\s*['\"]([^'\"]+\.(?:pkl|pt|pth|h5|onnx|pb|weights|bin|model))['\"]",
+            rf"with\s+open\s*\(\s*['\"]([^'\"]+\.(?:{model_ext_pattern}))['\"]",
             # MODEL_PATH = 'models/model.pkl' or model_path = '...'
-            r"(?:MODEL_PATH|model_path|MODEL_FILE|model_file)\s*=\s*['\"]([^'\"]+\.(?:pkl|pt|pth|h5|onnx|pb|weights|bin|model))['\"]",
+            rf"(?:MODEL_PATH|model_path|MODEL_FILE|model_file|WEIGHTS_PATH|weights_path)\s*=\s*['\"]([^'\"]+\.(?:{model_ext_pattern}))['\"]",
             # pd.read_pickle('model.pkl')
             r"read_pickle\s*\(\s*['\"]([^'\"]+)['\"]",
+            # Generic: any string that looks like a model path with extension
+            rf"['\"]([^'\"]*(?:model|weight|checkpoint|best|last)[^'\"]*\.(?:{model_ext_pattern}))['\"]",
+            # st.selectbox options or any list with model paths
+            rf"['\"]([^'\"]+\.(?:{model_ext_pattern}))['\"]",
         ]
         
         for pattern in patterns:
-            matches = re.findall(pattern, code_content, re.IGNORECASE)
-            for match in matches:
-                # Clean up the path
-                path = match.strip()
-                if path and path not in [p['path'] for p in model_paths]:
-                    model_paths.append({
-                        'path': path,
-                        'pattern': pattern[:50] + '...'
-                    })
-                    logger.info(f"  Found model path in code: {path}")
+            try:
+                matches = re.findall(pattern, code_content, re.IGNORECASE)
+                for match in matches:
+                    # Clean up the path
+                    path = match.strip()
+                    # Skip if empty, too short, or looks like a URL
+                    if not path or len(path) < 3 or path.startswith('http'):
+                        continue
+                    # Skip if it doesn't have a model extension
+                    ext = os.path.splitext(path)[1].lower()
+                    if ext not in ['.pkl', '.pt', '.pth', '.h5', '.onnx', '.pb', '.weights', '.bin', '.model', '.safetensors']:
+                        continue
+                    if path not in [p['path'] for p in model_paths]:
+                        model_paths.append({
+                            'path': path,
+                            'pattern': pattern[:50] + '...'
+                        })
+                        logger.info(f"  Found model path in code: {path}")
+            except Exception as e:
+                logger.warning(f"  Pattern matching error: {e}")
+                continue
         
         return model_paths
     
@@ -435,6 +455,16 @@ class ArchiveService:
         # Get the base directory of the app file (for relative path resolution)
         app_dir = os.path.dirname(app_file)
         
+        # Pre-compute model files by extension for aggressive matching
+        models_by_extension: Dict[str, List[str]] = {}
+        for model_file in model_files:
+            ext = os.path.splitext(model_file)[1].lower()
+            if ext not in models_by_extension:
+                models_by_extension[ext] = []
+            models_by_extension[ext].append(model_file)
+        
+        logger.info(f"  Available models by extension: {models_by_extension}")
+        
         # Try to match each expected path with available model files
         for expected in expected_paths:
             expected_path = expected['path']
@@ -456,41 +486,58 @@ class ArchiveService:
                 logger.info(f"  ✓ Model already at expected location: {full_expected_path}")
                 continue
             
-            # Find a matching model file to move/rename
-            best_match = None
-            best_score = 0
-            
-            for model_file in model_files:
-                model_filename = os.path.basename(model_file)
-                model_extension = os.path.splitext(model_filename)[1].lower()
+            # AGGRESSIVE MATCHING: If there's only ONE model file with the same extension, just use it!
+            same_ext_models = models_by_extension.get(expected_extension, [])
+            if len(same_ext_models) == 1:
+                best_match = same_ext_models[0]
+                logger.info(f"  ⚡ Aggressive match: Only one {expected_extension} file found: {best_match}")
+            else:
+                # Find a matching model file using scoring
+                best_match = None
+                best_score = 0
                 
-                # Check if already at expected location
-                if model_file.replace('\\', '/') == full_expected_path:
-                    best_match = None  # Already correct
-                    break
+                for model_file in model_files:
+                    model_filename = os.path.basename(model_file)
+                    model_extension = os.path.splitext(model_filename)[1].lower()
+                    
+                    # Check if already at expected location
+                    if model_file.replace('\\', '/') == full_expected_path:
+                        best_match = None  # Already correct
+                        break
+                    
+                    score = 0
+                    
+                    # Same extension = must match
+                    if model_extension == expected_extension:
+                        score += 10
+                    
+                    # Same filename = high match
+                    if model_filename.lower() == expected_filename.lower():
+                        score += 20
+                    
+                    # Similar filename (contains key parts)
+                    expected_name_parts = re.split(r'[_\-\s]', os.path.splitext(expected_filename)[0].lower())
+                    model_name_parts = re.split(r'[_\-\s]', os.path.splitext(model_filename)[0].lower())
+                    
+                    for part in expected_name_parts:
+                        if part in model_name_parts:
+                            score += 5
+                    
+                    # Extension must match for it to be a valid candidate
+                    if model_extension == expected_extension and score > best_score:
+                        best_score = score
+                        best_match = model_file
                 
-                score = 0
-                
-                # Same extension = must match
-                if model_extension == expected_extension:
-                    score += 10
-                
-                # Same filename = high match
-                if model_filename.lower() == expected_filename.lower():
-                    score += 20
-                
-                # Similar filename (contains key parts)
-                expected_name_parts = re.split(r'[_\-\s]', os.path.splitext(expected_filename)[0].lower())
-                model_name_parts = re.split(r'[_\-\s]', os.path.splitext(model_filename)[0].lower())
-                
-                for part in expected_name_parts:
-                    if part in model_name_parts:
-                        score += 5
-                
-                # Extension must match for it to be a valid candidate
-                if model_extension == expected_extension and score > best_score:
-                    best_score = score
-                    best_match = model_file
+                # FALLBACK: If we have multiple models with same extension but none matched well,
+                # and the expected filename is a common name like "best.pt" or "model.pt",
+                # try to find any model with the same extension
+                if best_match is None and expected_extension in models_by_extension:
+                    common_names = ['best', 'model', 'weights', 'last', 'final', 'trained', 'checkpoint']
+                    expected_base = os.path.splitext(expected_filename)[0].lower()
+                    if expected_base in common_names or len(same_ext_models) > 0:
+                        # Just use the first available model with matching extension
+                        best_match = same_ext_models[0]
+                        logger.info(f"  ⚡ Fallback match: Using first {expected_extension} file: {best_match}")
             
             if best_match:
                 # Create the target directory if needed
