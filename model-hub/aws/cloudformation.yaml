@@ -1,0 +1,350 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'AI Model Bazaar - Complete AWS Infrastructure with EC2'
+
+Parameters:
+  ProjectName:
+    Type: String
+    Default: model-hub
+    Description: Name of the project
+
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues:
+      - production
+      - staging
+    Description: Environment type
+
+  InstanceType:
+    Type: String
+    Default: m7i-flex.large
+    AllowedValues:
+      - t3.small
+      - c7i-flex.large
+      - m7i-flex.large
+    Description: EC2 instance type (free tier eligible)
+
+  KeyPairName:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair to enable SSH access
+
+  VpcCIDR:
+    Type: String
+    Default: 10.0.0.0/16
+    Description: CIDR block for VPC
+
+  PublicSubnetCIDR:
+    Type: String
+    Default: 10.0.1.0/24
+    Description: CIDR block for public subnet
+
+  MongoDBURL:
+    Type: String
+    NoEcho: true
+    Description: MongoDB Atlas connection URL
+
+  JWTSecretKey:
+    Type: String
+    NoEcho: true
+    Description: JWT secret key for authentication
+
+  AWSAccessKeyIdParam:
+    Type: String
+    NoEcho: true
+    Description: AWS Access Key ID for S3
+
+  AWSSecretAccessKeyParam:
+    Type: String
+    NoEcho: true
+    Description: AWS Secret Access Key for S3
+
+  S3BucketNameParam:
+    Type: String
+    Default: ai-model-bazaar-projects
+    Description: S3 bucket name for project files
+
+  AWSRegionParam:
+    Type: String
+    Default: ap-southeast-2
+    Description: AWS Region for S3
+
+Resources:
+  # VPC
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: !Ref VpcCIDR
+      EnableDnsHostnames: true
+      EnableDnsSupport: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-vpc
+
+  # Internet Gateway
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-igw
+
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+
+  # Public Subnet
+  PublicSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref VPC
+      AvailabilityZone: !Select [0, !GetAZs '']
+      CidrBlock: !Ref PublicSubnetCIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-public-subnet
+
+  # Route Table
+  PublicRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-public-rt
+
+  DefaultPublicRoute:
+    Type: AWS::EC2::Route
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+
+  PublicSubnetRouteTableAssociation:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      RouteTableId: !Ref PublicRouteTable
+      SubnetId: !Ref PublicSubnet
+
+  # Security Group for EC2
+  EC2SecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub ${ProjectName}-ec2-sg
+      GroupDescription: Security group for Model Hub EC2 instance
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        # SSH
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        # HTTP
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+        # HTTPS
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+        # Backend API
+        - IpProtocol: tcp
+          FromPort: 8000
+          ToPort: 8000
+          CidrIp: 0.0.0.0/0
+        # Frontend
+        - IpProtocol: tcp
+          FromPort: 3000
+          ToPort: 3000
+          CidrIp: 0.0.0.0/0
+        # Demo Ports (Streamlit)
+        - IpProtocol: tcp
+          FromPort: 8501
+          ToPort: 8600
+          CidrIp: 0.0.0.0/0
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-ec2-sg
+
+  # IAM Role for EC2
+  EC2Role:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub ${ProjectName}-ec2-role
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: ec2.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonS3FullAccess
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+        - arn:aws:iam::aws:policy/CloudWatchAgentServerPolicy
+      Policies:
+        - PolicyName: ECRAccess
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:GetAuthorizationToken
+                Resource: '*'
+
+  EC2InstanceProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      InstanceProfileName: !Sub ${ProjectName}-ec2-profile
+      Roles:
+        - !Ref EC2Role
+
+  # Elastic IP
+  ElasticIP:
+    Type: AWS::EC2::EIP
+    DependsOn: InternetGatewayAttachment
+    Properties:
+      Domain: vpc
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-eip
+
+  # EC2 Instance
+  EC2Instance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      KeyName: !Ref KeyPairName
+      ImageId: !FindInMap [RegionAMI, !Ref 'AWS::Region', AMI]
+      SubnetId: !Ref PublicSubnet
+      SecurityGroupIds:
+        - !Ref EC2SecurityGroup
+      IamInstanceProfile: !Ref EC2InstanceProfile
+      BlockDeviceMappings:
+        - DeviceName: /dev/xvda
+          Ebs:
+            VolumeSize: 50
+            VolumeType: gp3
+            DeleteOnTermination: true
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -e
+          
+          # Update system
+          yum update -y
+          
+          # Install Docker
+          amazon-linux-extras install docker -y
+          systemctl start docker
+          systemctl enable docker
+          usermod -a -G docker ec2-user
+          
+          # Install Docker Compose
+          curl -L "https://github.com/docker/compose/releases/download/v2.24.0/docker-compose-$(uname -s)-$(uname -m)" -o /usr/local/bin/docker-compose
+          chmod +x /usr/local/bin/docker-compose
+          
+          # Install Git
+          yum install -y git
+          
+          # Create app directory
+          mkdir -p /opt/model-hub
+          cd /opt/model-hub
+          
+          # Create environment file
+          cat > .env << 'EOF'
+          MONGODB_URL=${MongoDBURL}
+          DATABASE_NAME=model_hub
+          JWT_SECRET_KEY=${JWTSecretKey}
+          JWT_ALGORITHM=HS256
+          ACCESS_TOKEN_EXPIRE_MINUTES=1440
+          AWS_ACCESS_KEY_ID=${AWSAccessKeyIdParam}
+          AWS_SECRET_ACCESS_KEY=${AWSSecretAccessKeyParam}
+          AWS_REGION=${AWSRegionParam}
+          S3_BUCKET_NAME=${S3BucketNameParam}
+          DEMO_BASE_URL=http://${ElasticIP}
+          DEMO_PORT_START=8501
+          DEMO_PORT_END=8600
+          MAX_UPLOAD_SIZE_MB=500
+          CORS_ORIGINS=http://${ElasticIP},http://${ElasticIP}:3000
+          DEBUG=False
+          NEXT_PUBLIC_API_URL=http://${ElasticIP}:8000
+          EOF
+          
+          # Signal CloudFormation
+          /opt/aws/bin/cfn-signal -e $? --stack ${AWS::StackName} --resource EC2Instance --region ${AWS::Region}
+      Tags:
+        - Key: Name
+          Value: !Sub ${ProjectName}-server
+        - Key: Environment
+          Value: !Ref Environment
+
+  # Associate Elastic IP with EC2 Instance
+  EIPAssociation:
+    Type: AWS::EC2::EIPAssociation
+    Properties:
+      InstanceId: !Ref EC2Instance
+      EIP: !Ref ElasticIP
+
+# Region to AMI mapping (Amazon Linux 2023)
+Mappings:
+  RegionAMI:
+    us-east-1:
+      AMI: ami-0c02fb55956c7d316
+    us-west-2:
+      AMI: ami-0892d3c7ee96c0bf7
+    eu-west-1:
+      AMI: ami-0d71ea30463e0ff8d
+    ap-southeast-1:
+      AMI: ami-0753e0e42b20e96e3
+    ap-southeast-2:
+      AMI: ami-0310483fb2b488153
+    ap-south-1:
+      AMI: ami-0f5ee92e2d63afc18
+
+Outputs:
+  VPCId:
+    Description: VPC ID
+    Value: !Ref VPC
+    Export:
+      Name: !Sub ${ProjectName}-vpc-id
+
+  PublicSubnetId:
+    Description: Public Subnet ID
+    Value: !Ref PublicSubnet
+    Export:
+      Name: !Sub ${ProjectName}-public-subnet-id
+
+  EC2InstanceId:
+    Description: EC2 Instance ID
+    Value: !Ref EC2Instance
+    Export:
+      Name: !Sub ${ProjectName}-ec2-instance-id
+
+  EC2PublicIP:
+    Description: EC2 Public IP (Elastic IP)
+    Value: !Ref ElasticIP
+    Export:
+      Name: !Sub ${ProjectName}-public-ip
+
+  FrontendURL:
+    Description: Frontend URL
+    Value: !Sub http://${ElasticIP}:3000
+
+  BackendURL:
+    Description: Backend API URL
+    Value: !Sub http://${ElasticIP}:8000
+
+  SSHCommand:
+    Description: SSH command to connect to the instance
+    Value: !Sub ssh -i ${KeyPairName}.pem ec2-user@${ElasticIP}

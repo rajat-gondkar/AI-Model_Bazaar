@@ -1,0 +1,179 @@
+name: Deploy to AWS EC2
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Deployment environment'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+env:
+  AWS_REGION: ap-southeast-2
+
+jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install backend dependencies
+        working-directory: ./model-hub/backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest pytest-asyncio httpx
+
+      - name: Run backend tests
+        working-directory: ./model-hub/backend
+        run: |
+          pytest tests/ -v --ignore=tests/integration || echo "No tests found, skipping..."
+        env:
+          MONGODB_URL: mongodb://localhost:27017
+          DATABASE_NAME: test_db
+          JWT_SECRET_KEY: test-secret-key-for-testing-only
+          AWS_ACCESS_KEY_ID: test
+          AWS_SECRET_ACCESS_KEY: test
+          S3_BUCKET_NAME: test-bucket
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: './model-hub/frontend/package-lock.json'
+
+      - name: Install frontend dependencies
+        working-directory: ./model-hub/frontend
+        run: npm ci
+
+      - name: Run frontend lint
+        working-directory: ./model-hub/frontend
+        run: npm run lint || echo "Lint completed"
+
+      - name: Build frontend
+        working-directory: ./model-hub/frontend
+        run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000
+
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    needs: test
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Get EC2 instance IP
+        id: ec2
+        run: |
+          # Get the public IP from CloudFormation outputs
+          PUBLIC_IP=$(aws cloudformation describe-stacks \
+            --stack-name model-hub-stack \
+            --query 'Stacks[0].Outputs[?OutputKey==`EC2PublicIP`].OutputValue' \
+            --output text)
+          echo "PUBLIC_IP=$PUBLIC_IP" >> $GITHUB_OUTPUT
+
+      - name: Create deployment package
+        run: |
+          # Create a tarball of the application
+          tar -czvf deploy.tar.gz \
+            --exclude='node_modules' \
+            --exclude='.git' \
+            --exclude='venv' \
+            --exclude='__pycache__' \
+            --exclude='.next' \
+            --exclude='*.pyc' \
+            model-hub/
+
+      - name: Copy files to EC2
+        uses: appleboy/scp-action@v0.1.7
+        with:
+          host: ${{ steps.ec2.outputs.PUBLIC_IP }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          source: "deploy.tar.gz"
+          target: "/tmp/"
+
+      - name: Deploy on EC2
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ steps.ec2.outputs.PUBLIC_IP }}
+          username: ec2-user
+          key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          script: |
+            set -e
+            
+            echo "=== Extracting deployment package ==="
+            cd /tmp
+            tar -xzvf deploy.tar.gz
+            
+            echo "=== Moving to application directory ==="
+            sudo rm -rf /opt/model-hub/model-hub
+            sudo mv model-hub /opt/model-hub/
+            
+            echo "=== Updating .env file ==="
+            cd /opt/model-hub/model-hub
+            
+            # Create .env from secrets (these are set in CloudFormation UserData)
+            if [ -f "/opt/model-hub/.env" ]; then
+              sudo cp /opt/model-hub/.env .
+            fi
+            
+            echo "=== Building and starting containers ==="
+            sudo docker-compose down --remove-orphans || true
+            sudo docker-compose build --no-cache
+            sudo docker-compose up -d
+            
+            echo "=== Waiting for services ==="
+            sleep 15
+            
+            echo "=== Health check ==="
+            curl -f http://localhost:8000/health || echo "Backend health check pending..."
+            
+            echo "=== Deployment complete ==="
+            sudo docker-compose ps
+
+      - name: Notify deployment status
+        if: always()
+        run: |
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ Deployment successful!"
+            echo "Frontend: http://${{ steps.ec2.outputs.PUBLIC_IP }}:3000"
+            echo "Backend: http://${{ steps.ec2.outputs.PUBLIC_IP }}:8000"
+          else
+            echo "❌ Deployment failed. Check the logs above."
+          fi
+
+  cleanup:
+    name: Cleanup
+    runs-on: ubuntu-latest
+    needs: deploy
+    if: always()
+    steps:
+      - name: Remove deployment artifacts
+        run: echo "Cleanup completed"

@@ -20,16 +20,39 @@ wheels/
 .installed.cfg
 *.egg
 
+modelhub.pem
+*.pem
+*.key
+*.ppk
+.ssh/
+*.p12
+*.pfx
+
+# Credentials and config files
+.model-hub-config
+.model-hub-deployments.log
+.aws/
+.credentials
+
 # Virtual environments
 .venv/
 venv/
 ENV/
 env/
 .env.local
+Tests/
 
 # Environment variables
 .env
 *.env
+!.env.example
+!.env.production.example
+.env.local
+.env.development
+.env.production
+.env.test
+model-hub/backend/.env
+model-hub/frontend/.env
 
 # IDE
 .idea/

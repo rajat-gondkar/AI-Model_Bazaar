@@ -1,0 +1,49 @@
+# Docker ignore file for frontend
+
+# Dependencies
+node_modules/
+.pnp/
+.pnp.js
+
+# Testing
+coverage/
+
+# Next.js
+.next/
+out/
+
+# Build
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Local env files
+.env.local
+.env.development
+.env.test
+
+# Debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Git
+.git/
+.gitignore
+
+# Documentation
+docs/
+*.md
+!README.md
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
