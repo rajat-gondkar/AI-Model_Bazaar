@@ -16,7 +16,10 @@ RUN apt-get update && apt-get install -y \
     curl \
     unzip \
     git \
-    && rm -rf /var/lib/apt/lists/*
+    ca-certificates \
+    openssl \
+    && rm -rf /var/lib/apt/lists/* \
+    && update-ca-certificates
 
 # Install Python dependencies
 COPY requirements.txt .
