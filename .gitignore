@@ -12,6 +12,7 @@ eggs/
 .eggs/
 lib64/
 parts/
+deployment.txt
 # Exclude Python lib but allow frontend src/lib
 !model-hub/frontend/src/lib/
 sdist/

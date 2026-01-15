@@ -13,6 +13,8 @@ services:
     restart: unless-stopped
     ports:
       - "8000:8000"
+      # Streamlit demo ports (8501-8600) - demos run inside backend container
+      - "8501-8600:8501-8600"
     environment:
       - MONGODB_URL=${MONGODB_URL}
       - DATABASE_NAME=${DATABASE_NAME:-model_hub}
