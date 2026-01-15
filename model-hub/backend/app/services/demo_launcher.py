@@ -274,18 +274,53 @@ class DemoLauncher:
                     requirements_content = f.read()
                     logger.info(f"Requirements content:\n{requirements_content}")
                 
-                result = subprocess.run(
-                    [pip_path, "install", "-r", requirements_path],
+                # First upgrade pip to latest version
+                logger.info("Upgrading pip to latest version...")
+                subprocess.run(
+                    [pip_path, "install", "--upgrade", "pip"],
                     capture_output=True,
                     text=True,
-                    timeout=600  # 10 minute timeout for large dependencies
+                    timeout=120
                 )
                 
-                if result.returncode != 0:
-                    logger.warning(f"Some packages may have failed to install: {result.stderr}")
-                    logger.info(f"pip install stdout: {result.stdout}")
-                else:
-                    logger.info(f"Successfully installed requirements")
+                # Try to install requirements with retries
+                max_retries = 2
+                for attempt in range(max_retries):
+                    logger.info(f"Installing requirements (attempt {attempt + 1}/{max_retries})...")
+                    result = subprocess.run(
+                        [pip_path, "install", "-r", requirements_path],
+                        capture_output=True,
+                        text=True,
+                        timeout=600  # 10 minute timeout for large dependencies
+                    )
+                    
+                    if result.returncode == 0:
+                        logger.info(f"Successfully installed all requirements")
+                        break
+                    else:
+                        logger.warning(f"Attempt {attempt + 1} had issues: {result.stderr}")
+                        if attempt < max_retries - 1:
+                            # Try installing packages one by one on retry
+                            logger.info("Trying to install packages individually...")
+                            with open(requirements_path, 'r') as f:
+                                for line in f:
+                                    line = line.strip()
+                                    if line and not line.startswith('#'):
+                                        try:
+                                            subprocess.run(
+                                                [pip_path, "install", line],
+                                                capture_output=True,
+                                                text=True,
+                                                timeout=120
+                                            )
+                                            logger.info(f"Installed: {line}")
+                                        except Exception as e:
+                                            logger.warning(f"Could not install {line}: {e}")
+                        else:
+                            logger.warning(f"Some packages may have failed to install after {max_retries} attempts")
+                            logger.info(f"pip install stdout: {result.stdout}")
+            else:
+                logger.warning(f"No requirements.txt found for {project_id}")
             
             # Always install streamlit
             self.preparing_envs[project_id] = "Installing Streamlit..."
@@ -375,6 +410,14 @@ class DemoLauncher:
             working_dir = self.get_working_directory(app_path)
             logger.info(f"Running demo for {project_id} on port {port}")
             
+            # Set up environment with PYTHONPATH to include working directory
+            # This allows Python to find local modules like settings.py, webapp_fn.py, etc.
+            env = os.environ.copy()
+            if 'PYTHONPATH' in env:
+                env['PYTHONPATH'] = f"{working_dir}:{env['PYTHONPATH']}"
+            else:
+                env['PYTHONPATH'] = working_dir
+            
             process = subprocess.Popen(
                 [
                     streamlit_path, "run", app_path,
@@ -384,6 +427,7 @@ class DemoLauncher:
                     "--browser.gatherUsageStats", "false"
                 ],
                 cwd=working_dir,
+                env=env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 preexec_fn=os.setsid if os.name != 'nt' else None
@@ -468,6 +512,14 @@ class DemoLauncher:
             logger.info(f"  App path: {app_path}")
             logger.info(f"  Working dir: {working_dir}")
             
+            # Set up environment with PYTHONPATH to include working directory
+            # This allows Python to find local modules like settings.py, webapp_fn.py, etc.
+            env = os.environ.copy()
+            if 'PYTHONPATH' in env:
+                env['PYTHONPATH'] = f"{working_dir}:{env['PYTHONPATH']}"
+            else:
+                env['PYTHONPATH'] = working_dir
+            
             process = subprocess.Popen(
                 [
                     streamlit_path, "run", app_path,
@@ -477,6 +529,7 @@ class DemoLauncher:
                     "--browser.gatherUsageStats", "false"
                 ],
                 cwd=working_dir,  # Run in the directory containing the app
+                env=env,  # Include PYTHONPATH for local module imports
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 preexec_fn=os.setsid if os.name != 'nt' else None
