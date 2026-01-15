@@ -9,7 +9,8 @@ import subprocess
 import asyncio
 import signal
 import socket
-from typing import Optional, Dict, Tuple, List
+import re
+from typing import Optional, Dict, Tuple, List, Set
 import logging
 from datetime import datetime
 
@@ -18,6 +19,34 @@ from app.services.s3_service import s3_service
 from app.services.archive_service import ArchiveService
 
 logger = logging.getLogger(__name__)
+
+# Mapping of import names to pip package names
+IMPORT_TO_PACKAGE = {
+    'cv2': 'opencv-python-headless',
+    'sklearn': 'scikit-learn',
+    'skimage': 'scikit-image',
+    'PIL': 'Pillow',
+    'yaml': 'PyYAML',
+    'easyocr': 'easyocr',
+    'tensorflow': 'tensorflow',
+    'torch': 'torch',
+    'torchvision': 'torchvision',
+    'ultralytics': 'ultralytics',
+    'yolov5': 'yolov5',
+    'detectron2': 'detectron2',
+    'mediapipe': 'mediapipe',
+    'albumentations': 'albumentations',
+    'transformers': 'transformers',
+    'diffusers': 'diffusers',
+    'plotly': 'plotly',
+    'matplotlib': 'matplotlib',
+    'seaborn': 'seaborn',
+    'scipy': 'scipy',
+    'keras': 'keras',
+    'xgboost': 'xgboost',
+    'lightgbm': 'lightgbm',
+    'catboost': 'catboost',
+}
 
 
 class DemoLauncher:
@@ -89,6 +118,45 @@ class DemoLauncher:
     def get_working_directory(self, app_path: str) -> str:
         """Get the working directory for running the app (directory containing the app file)."""
         return os.path.dirname(app_path)
+    
+    def scan_for_imports(self, files_path: str) -> Set[str]:
+        """
+        Scan Python files for import statements and return package names that need to be installed.
+        
+        Args:
+            files_path: Path to the project files
+            
+        Returns:
+            Set of pip package names to install
+        """
+        packages_to_install = set()
+        import_pattern = re.compile(r'^(?:import|from)\s+([a-zA-Z_][a-zA-Z0-9_]*)')
+        
+        try:
+            for root, dirs, files in os.walk(files_path):
+                # Skip venv and hidden directories
+                dirs[:] = [d for d in dirs if not d.startswith('.') and d != 'venv' and d != '__pycache__']
+                
+                for file in files:
+                    if file.endswith('.py'):
+                        filepath = os.path.join(root, file)
+                        try:
+                            with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                                for line in f:
+                                    line = line.strip()
+                                    match = import_pattern.match(line)
+                                    if match:
+                                        module_name = match.group(1)
+                                        # Check if this import maps to a pip package
+                                        if module_name in IMPORT_TO_PACKAGE:
+                                            packages_to_install.add(IMPORT_TO_PACKAGE[module_name])
+                                            logger.info(f"Found import '{module_name}' -> will install '{IMPORT_TO_PACKAGE[module_name]}'")
+                        except Exception as e:
+                            logger.warning(f"Error reading {filepath}: {e}")
+        except Exception as e:
+            logger.error(f"Error scanning for imports: {e}")
+        
+        return packages_to_install
     
     def get_available_port(self) -> Optional[int]:
         """
@@ -322,16 +390,52 @@ class DemoLauncher:
             else:
                 logger.warning(f"No requirements.txt found for {project_id}")
             
-            # Always install streamlit
-            self.preparing_envs[project_id] = "Installing Streamlit..."
-            result = subprocess.run(
-                [pip_path, "install", "streamlit"],
-                capture_output=True,
-                text=True
-            )
+            # Always install streamlit and common packages that are often needed
+            self.preparing_envs[project_id] = "Installing Streamlit and common packages..."
             
-            if result.returncode != 0:
-                logger.warning(f"Streamlit installation warning: {result.stderr}")
+            # Common packages that many ML/CV demos need
+            common_packages = [
+                "streamlit",
+                "opencv-python-headless",  # OpenCV for computer vision (headless for servers)
+                "Pillow",                   # Image processing
+                "numpy",                    # Numerical computing
+                "pandas",                   # Data manipulation
+            ]
+            
+            for package in common_packages:
+                try:
+                    result = subprocess.run(
+                        [pip_path, "install", package],
+                        capture_output=True,
+                        text=True,
+                        timeout=180
+                    )
+                    if result.returncode == 0:
+                        logger.info(f"Installed {package}")
+                    else:
+                        logger.warning(f"Failed to install {package}: {result.stderr}")
+                except Exception as e:
+                    logger.warning(f"Error installing {package}: {e}")
+            
+            # Scan Python files for imports and install detected packages
+            self.preparing_envs[project_id] = "Scanning and installing detected dependencies..."
+            detected_packages = self.scan_for_imports(files_path)
+            if detected_packages:
+                logger.info(f"Detected packages from imports: {detected_packages}")
+                for package in detected_packages:
+                    try:
+                        result = subprocess.run(
+                            [pip_path, "install", package],
+                            capture_output=True,
+                            text=True,
+                            timeout=300  # Some packages like torch take longer
+                        )
+                        if result.returncode == 0:
+                            logger.info(f"Installed detected package: {package}")
+                        else:
+                            logger.warning(f"Failed to install detected package {package}: {result.stderr}")
+                    except Exception as e:
+                        logger.warning(f"Error installing detected package {package}: {e}")
             
             logger.info(f"Environment setup complete for {project_id}")
             if project_id in self.preparing_envs:

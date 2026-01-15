@@ -1,13 +1,14 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { projectsApi } from '@/lib/api';
 import { Project } from '@/types';
 import { useAuth } from '@/context/AuthContext';
 import LaunchButton from '@/components/demo/LaunchButton';
 import { ModelDetailsSkeleton } from '@/components/ui/Skeleton';
+import toast from 'react-hot-toast';
 import { 
   ArrowLeft, 
   User, 
@@ -17,18 +18,37 @@ import {
   Box, 
   FileText,
   Loader2,
-  ExternalLink
+  ExternalLink,
+  Trash2
 } from 'lucide-react';
 import { formatDate, getStatusColor, parseApiError } from '@/lib/utils';
 
 export default function ModelDetailPage() {
   const params = useParams();
+  const router = useRouter();
   const projectId = params.id as string;
   const { user } = useAuth();
 
   const [project, setProject] = useState<Project | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const handleDeleteProject = async () => {
+    if (!confirm('Are you sure you want to delete this project? This action cannot be undone.')) {
+      return;
+    }
+
+    setIsDeleting(true);
+    try {
+      await projectsApi.delete(projectId);
+      toast.success('Project deleted successfully');
+      router.push('/gallery');
+    } catch (err: any) {
+      toast.error(parseApiError(err));
+      setIsDeleting(false);
+    }
+  };
 
   useEffect(() => {
     const fetchProject = async () => {
@@ -239,10 +259,21 @@ export default function ModelDetailPage() {
                 <h3 className="font-semibold text-yellow-900 mb-3">You own this project</h3>
                 <div className="space-y-2">
                   <button
-                    onClick={() => {/* TODO: implement delete */}}
-                    className="w-full py-2 px-4 text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors"
+                    onClick={handleDeleteProject}
+                    disabled={isDeleting}
+                    className="w-full py-2 px-4 text-red-600 border border-red-200 rounded-lg hover:bg-red-50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
                   >
-                    Delete Project
+                    {isDeleting ? (
+                      <>
+                        <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                        Deleting...
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 className="h-4 w-4 mr-2" />
+                        Delete Project
+                      </>
+                    )}
                   </button>
                 </div>
               </div>
