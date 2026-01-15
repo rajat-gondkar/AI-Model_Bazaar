@@ -6,6 +6,7 @@ Uses Motor for async MongoDB operations.
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorDatabase
 from typing import Optional, Any
 import logging
+import certifi
 
 from app.config import settings
 
@@ -21,7 +22,14 @@ class MongoDB:
     async def connect(self):
         """Establish connection to MongoDB."""
         try:
-            self.client = AsyncIOMotorClient(settings.mongodb_url)
+            # Use certifi for SSL certificate verification with MongoDB Atlas
+            self.client = AsyncIOMotorClient(
+                settings.mongodb_url,
+                tlsCAFile=certifi.where(),
+                serverSelectionTimeoutMS=30000,
+                connectTimeoutMS=20000,
+                socketTimeoutMS=20000
+            )
             self.database = self.client[settings.database_name]
             
             # Verify connection
