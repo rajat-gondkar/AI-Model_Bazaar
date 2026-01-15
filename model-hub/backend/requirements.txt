@@ -1,4 +1,4 @@
-₹# FastAPI and Server
+# FastAPI and Server
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 python-multipart==0.0.6
