@@ -9,7 +9,7 @@ ENV PYTHONPATH=/app
 # Set working directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies including OpenCV requirements
 RUN apt-get update && apt-get install -y \
     gcc \
     libffi-dev \
@@ -18,6 +18,19 @@ RUN apt-get update && apt-get install -y \
     git \
     ca-certificates \
     openssl \
+    # OpenCV dependencies
+    libgl1 \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender1 \
+    libgomp1 \
+    # Additional image processing libraries
+    libgstreamer1.0-0 \
+    libgstreamer-plugins-base1.0-0 \
+    # Python virtual environment support for demos
+    python3-venv \
     && rm -rf /var/lib/apt/lists/* \
     && update-ca-certificates
 
