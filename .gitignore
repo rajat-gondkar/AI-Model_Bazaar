@@ -21,6 +21,8 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+demo-showcase/
+Image-Filter-Studio-Demo.zip
 
 modelhub.pem
 *.pem
